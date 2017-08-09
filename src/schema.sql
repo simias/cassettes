@@ -1,0 +1,6 @@
+CREATE TABLE tapes(
+       id INTEGER PRIMARY KEY AUTOINCREMENT,
+       title TEXT NOT NULL,
+       tape TEXT NOT NULL,
+       timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+);

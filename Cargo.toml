@@ -1,0 +1,12 @@
+[package]
+name = "cassettes"
+version = "0.1.0"
+authors = ["Lionel Flandrin <lionel@svkt.org>"]
+
+[dependencies]
+rusqlite = "0.12"
+time = "0.1"
+
+[dependencies.gtk]
+features = ["v3_12"]
+version = "0.1"

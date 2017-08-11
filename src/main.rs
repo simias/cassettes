@@ -6,7 +6,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::path::Path;
 
-use time::{Timespec, strftime};
+use time::strftime;
 
 use rusqlite::Connection;
 
@@ -21,7 +21,7 @@ struct Tape {
     id: u32,
     title: String,
     tape: String,
-    ts: Timespec,
+    date: String,
 }
 
 struct Context {
@@ -42,6 +42,13 @@ struct Context {
     add_cancel_button: Button,
     add_title_entry: Entry,
     add_tape_entry: Entry,
+
+    delete_dialog: Dialog,
+    delete_delete_button: Button,
+    delete_cancel_button: Button,
+    delete_title_entry: Entry,
+    delete_tape_entry: Entry,
+    delete_date_entry: Entry,
 }
 
 impl Context {
@@ -75,6 +82,13 @@ impl Context {
             add_cancel_button: builder.get_object("add_cancel_button").unwrap(),
             add_title_entry: builder.get_object("add_title_entry").unwrap(),
             add_tape_entry: builder.get_object("add_tape_entry").unwrap(),
+
+            delete_dialog: builder.get_object("delete_dialog").unwrap(),
+            delete_delete_button: builder.get_object("delete_delete_button").unwrap(),
+            delete_cancel_button: builder.get_object("delete_cancel_button").unwrap(),
+            delete_title_entry: builder.get_object("delete_title_entry").unwrap(),
+            delete_tape_entry: builder.get_object("delete_tape_entry").unwrap(),
+            delete_date_entry: builder.get_object("delete_date_entry").unwrap(),
         };
 
         context.tape_treeview.set_model(Some(&context.tape_model_filter));
@@ -92,25 +106,28 @@ impl Context {
                              FROM tapes ORDER BY id DESC").unwrap();
 
         let tapes: Vec<_> = stmt.query_map(&[], |row| {
+            let ts = row.get(3);
+
+            let tm = time::at(ts);
+            let date = strftime("%Y-%m-%d %H:%M:%S", &tm).unwrap();
+
             Tape {
                 id: row.get(0),
                 title: row.get(1),
                 tape: row.get(2),
-                ts: row.get(3)
+                date: date,
             }
         }).unwrap()
             .map(|t| t.unwrap())
             .collect();
 
         for tape in &tapes {
-            let tm = time::at(tape.ts);
-            let date = strftime("%Y-%m-%d %H:%M:%S", &tm).unwrap();
 
             self.tape_model.insert_with_values(None, &[0, 1, 2, 3],
                                                &[&tape.id,
                                                  &tape.title,
                                                  &tape.tape,
-                                                 &date]);
+                                                 &tape.date]);
         }
 
         let status_text =
@@ -152,12 +169,32 @@ impl Context {
             return;
         }
 
-        
+
         self.db.execute("INSERT INTO tapes (title, tape) \
                          VALUES (?1, ?2)",
                         &[&title, &tape]).unwrap();
 
         self.load_tapes();
+    }
+
+    fn do_delete_tape(&self, id: u32) {
+        self.db.execute("DELETE FROM tapes WHERE id = ?1",
+                        &[&id]).unwrap();
+
+        self.load_tapes();
+    }
+
+    fn get_selection(&self) -> Option<Tape> {
+        let selection = self.tape_treeview.get_selection();
+
+        selection.get_selected().map(|(model, iter)| {
+            Tape {
+                id: model.get_value(&iter, 0).get().unwrap(),
+                title: model.get_value(&iter, 1).get().unwrap(),
+                tape: model.get_value(&iter, 2).get().unwrap(),
+                date: model.get_value(&iter, 3).get().unwrap(),
+            }
+        })
     }
 }
 
@@ -310,6 +347,65 @@ fn ui_init(context: &Rc<RefCell<Context>>) {
         }
     });
 
+    let ctx_clone = context.clone();
+
+    ctx.delete_button.connect_clicked(move |_| {
+        let context = &ctx_clone;
+        let ctx = context.borrow();
+
+        ctx.delete_dialog.set_transient_for(&ctx.main_window);
+        ctx.delete_dialog.set_modal(true);
+
+        ctx.delete_title_entry.set_sensitive(false);
+        ctx.delete_tape_entry.set_sensitive(false);
+        ctx.delete_date_entry.set_sensitive(false);
+
+        let selected = match ctx.get_selection() {
+            Some(t) => t,
+            None => return,
+        };
+
+        ctx.delete_title_entry.set_text(&selected.title);
+        ctx.delete_tape_entry.set_text(&selected.tape);
+        ctx.delete_date_entry.set_text(&selected.date);
+
+        let ctx_clone = context.clone();
+
+        ctx.delete_cancel_button.connect_clicked(move |_| {
+            let ctx = ctx_clone.borrow();
+
+            ctx.delete_dialog.response(ResponseType::Cancel.into());
+        });
+
+
+        // let ctx_clone = context.clone();
+        // ctx.add_title_entry.connect_changed(move |_| {
+        //     ctx_clone.borrow().check_add_filled();
+        // });
+
+        // let ctx_clone = context.clone();
+        // ctx.add_tape_entry.connect_changed(move |_| {
+        //     ctx_clone.borrow().check_add_filled();
+        // });
+
+        let ctx_clone = context.clone();
+
+        ctx.delete_delete_button.connect_clicked(move |_| {
+            let ctx = ctx_clone.borrow();
+
+            ctx.delete_dialog.response(ResponseType::Ok.into());
+        });
+
+        ctx.delete_dialog.show_all();
+
+        let result = ctx.delete_dialog.run();
+
+        ctx.delete_dialog.hide();
+
+        if result == ResponseType::Ok.into() {
+            ctx.do_delete_tape(selected.id);
+        }
+    });
+
     ctx.main_window.show_all();
 }
-

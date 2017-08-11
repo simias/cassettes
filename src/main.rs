@@ -160,6 +160,15 @@ impl Context {
         self.add_add_button.set_sensitive(filled);
     }
 
+    fn check_edit_filled(&self) {
+        let title = self.edit_title_entry.get_text().unwrap_or(String::new());
+        let tape = self.edit_tape_entry.get_text().unwrap_or(String::new());
+
+        let filled = !title.is_empty() && !tape.is_empty();
+
+        self.edit_save_button.set_sensitive(filled);
+    }
+
     fn do_add_tape(&self) {
         let title = self.add_title_entry.get_text().unwrap_or(String::new());
         let tape = self.add_tape_entry.get_text().unwrap_or(String::new());
@@ -318,7 +327,6 @@ fn ui_init(context: &Rc<RefCell<Context>>) {
         let context = &ctx_clone;
         let ctx = context.borrow();
 
-        ctx.add_dialog.set_transient_for(&ctx.main_window);
         ctx.add_dialog.set_modal(true);
 
         ctx.add_add_button.set_sensitive(false);
@@ -330,7 +338,6 @@ fn ui_init(context: &Rc<RefCell<Context>>) {
 
             ctx.add_dialog.response(ResponseType::Cancel.into());
         });
-
 
         let ctx_clone = context.clone();
         ctx.add_title_entry.connect_changed(move |_| {
@@ -367,10 +374,10 @@ fn ui_init(context: &Rc<RefCell<Context>>) {
         let context = &ctx_clone;
         let ctx = context.borrow();
 
-        ctx.edit_dialog.set_transient_for(&ctx.main_window);
         ctx.edit_dialog.set_modal(true);
 
         ctx.edit_date_entry.set_sensitive(false);
+        ctx.edit_save_button.set_sensitive(false);
 
         let selected = match ctx.get_selection() {
             Some(t) => t,
@@ -380,6 +387,16 @@ fn ui_init(context: &Rc<RefCell<Context>>) {
         ctx.edit_title_entry.set_text(&selected.title);
         ctx.edit_tape_entry.set_text(&selected.tape);
         ctx.edit_date_entry.set_text(&selected.date);
+
+        let ctx_clone = context.clone();
+        ctx.edit_title_entry.connect_changed(move |_| {
+            ctx_clone.borrow().check_edit_filled();
+        });
+
+        let ctx_clone = context.clone();
+        ctx.edit_tape_entry.connect_changed(move |_| {
+            ctx_clone.borrow().check_edit_filled();
+        });
 
         let ctx_clone = context.clone();
 

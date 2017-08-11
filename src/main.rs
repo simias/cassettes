@@ -13,7 +13,7 @@ use rusqlite::Connection;
 use gtk::prelude::*;
 use gtk::{Builder, Window, Label, ListStore, TreeView};
 use gtk::{TreeViewColumn, CellRendererText, TreeModelFilter};
-use gtk::{Button, Entry, Dialog};
+use gtk::{Button, Entry, Dialog, ResponseType};
 
 const UI_GLADE: &'static str = include_str!("ui.glade");
 
@@ -26,7 +26,6 @@ struct Tape {
 
 struct Context {
     db: Connection,
-    tapes: Vec<Tape>,
     main_window: Window,
     search_entry: Entry,
     add_button: Button,
@@ -37,6 +36,12 @@ struct Context {
     tape_treeview: TreeView,
     tape_model: ListStore,
     tape_model_filter: TreeModelFilter,
+
+    add_dialog: Dialog,
+    add_add_button: Button,
+    add_cancel_button: Button,
+    add_title_entry: Entry,
+    add_tape_entry: Entry,
 }
 
 impl Context {
@@ -52,9 +57,8 @@ impl Context {
 
         let tape_model_filter = TreeModelFilter::new(&tape_model, None);
 
-        let mut context = Context {
+        let context = Context {
             db: db,
-            tapes: Vec::new(),
             main_window: builder.get_object("main_window").unwrap(),
             search_entry: builder.get_object("search_entry").unwrap(),
             add_button: builder.get_object("add_button").unwrap(),
@@ -66,6 +70,11 @@ impl Context {
             tape_model: tape_model,
             tape_model_filter: tape_model_filter,
 
+            add_dialog: builder.get_object("add_dialog").unwrap(),
+            add_add_button: builder.get_object("add_add_button").unwrap(),
+            add_cancel_button: builder.get_object("add_cancel_button").unwrap(),
+            add_title_entry: builder.get_object("add_title_entry").unwrap(),
+            add_tape_entry: builder.get_object("add_tape_entry").unwrap(),
         };
 
         context.tape_treeview.set_model(Some(&context.tape_model_filter));
@@ -75,12 +84,14 @@ impl Context {
         context
     }
 
-    fn load_tapes(&mut self) {
+    fn load_tapes(&self) {
+        self.tape_model.clear();
+
         let mut stmt =
             self.db.prepare("SELECT id, title, tape, timestamp \
-                             FROM tapes ORDER BY id ASC").unwrap();
+                             FROM tapes ORDER BY id DESC").unwrap();
 
-        self.tapes = stmt.query_map(&[], |row| {
+        let tapes: Vec<_> = stmt.query_map(&[], |row| {
             Tape {
                 id: row.get(0),
                 title: row.get(1),
@@ -91,7 +102,7 @@ impl Context {
             .map(|t| t.unwrap())
             .collect();
 
-        for tape in &self.tapes {
+        for tape in &tapes {
             let tm = time::at(tape.ts);
             let date = strftime("%Y-%m-%d %H:%M:%S", &tm).unwrap();
 
@@ -101,6 +112,12 @@ impl Context {
                                                  &tape.tape,
                                                  &date]);
         }
+
+        let status_text =
+            format!("<span foreground=\"green\">{}</span> films référencés",
+                    tapes.len());
+
+        self.status_label.set_markup(&status_text);
     }
 
     fn treeview_add_column(&self, id: i32, title: &str, visible: bool) {
@@ -115,6 +132,32 @@ impl Context {
         // Association of the view's column with the model's `id` column.
         column.add_attribute(&cell, "text", id);
         self.tape_treeview.append_column(&column);
+    }
+
+    fn check_add_filled(&self) {
+        let title = self.add_title_entry.get_text().unwrap_or(String::new());
+        let tape = self.add_tape_entry.get_text().unwrap_or(String::new());
+
+        let filled = !title.is_empty() && !tape.is_empty();
+
+        self.add_add_button.set_sensitive(filled);
+    }
+
+    fn do_add_tape(&self) {
+        let title = self.add_title_entry.get_text().unwrap_or(String::new());
+        let tape = self.add_tape_entry.get_text().unwrap_or(String::new());
+
+        if title.is_empty() || tape.is_empty() {
+            // Shouldn't happen
+            return;
+        }
+
+        
+        self.db.execute("INSERT INTO tapes (title, tape) \
+                         VALUES (?1, ?2)",
+                        &[&title, &tape]).unwrap();
+
+        self.load_tapes();
     }
 }
 
@@ -178,12 +221,6 @@ fn ui_init(context: &Rc<RefCell<Context>>) {
         }
     });
 
-    let status_text =
-        format!("<span foreground=\"green\">{}</span> films référencés",
-                context.borrow().tapes.len());
-
-    ctx.status_label.set_markup(&status_text);
-
     let ctx_clone = context.clone();
 
     ctx.tape_treeview.connect_cursor_changed(move |tree_view| {
@@ -213,7 +250,7 @@ fn ui_init(context: &Rc<RefCell<Context>>) {
     ctx.search_entry.connect_changed(move |entry| {
         let ctx = ctx_clone.borrow();
 
-        let search = ctx.search_entry.get_text().unwrap_or(String::new());
+        let search = entry.get_text().unwrap_or(String::new());
 
         if search.is_empty() {
             ctx.clear_button.set_sensitive(false);
@@ -222,6 +259,55 @@ fn ui_init(context: &Rc<RefCell<Context>>) {
         }
 
         ctx.tape_model_filter.refilter();
+    });
+
+    let ctx_clone = context.clone();
+
+    ctx.add_button.connect_clicked(move |_| {
+        let context = &ctx_clone;
+        let ctx = context.borrow();
+
+        ctx.add_dialog.set_transient_for(&ctx.main_window);
+        ctx.add_dialog.set_modal(true);
+
+        ctx.add_add_button.set_sensitive(false);
+
+        let ctx_clone = context.clone();
+
+        ctx.add_cancel_button.connect_clicked(move |_| {
+            let ctx = ctx_clone.borrow();
+
+            ctx.add_dialog.response(ResponseType::Cancel.into());
+        });
+
+
+        let ctx_clone = context.clone();
+        ctx.add_title_entry.connect_changed(move |_| {
+            ctx_clone.borrow().check_add_filled();
+        });
+
+        let ctx_clone = context.clone();
+        ctx.add_tape_entry.connect_changed(move |_| {
+            ctx_clone.borrow().check_add_filled();
+        });
+
+        let ctx_clone = context.clone();
+
+        ctx.add_add_button.connect_clicked(move |_| {
+            let ctx = ctx_clone.borrow();
+
+            ctx.add_dialog.response(ResponseType::Ok.into());
+        });
+
+        ctx.add_dialog.show_all();
+
+        let result = ctx.add_dialog.run();
+
+        ctx.add_dialog.hide();
+
+        if result == ResponseType::Ok.into() {
+            ctx.do_add_tape();
+        }
     });
 
     ctx.main_window.show_all();

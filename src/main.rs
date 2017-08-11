@@ -30,7 +30,6 @@ struct Context {
     search_entry: Entry,
     add_button: Button,
     edit_button: Button,
-    delete_button: Button,
     clear_button: Button,
     status_label: Label,
     tape_treeview: TreeView,
@@ -43,12 +42,13 @@ struct Context {
     add_title_entry: Entry,
     add_tape_entry: Entry,
 
-    delete_dialog: Dialog,
-    delete_delete_button: Button,
-    delete_cancel_button: Button,
-    delete_title_entry: Entry,
-    delete_tape_entry: Entry,
-    delete_date_entry: Entry,
+    edit_dialog: Dialog,
+    edit_delete_button: Button,
+    edit_cancel_button: Button,
+    edit_save_button: Button,
+    edit_title_entry: Entry,
+    edit_tape_entry: Entry,
+    edit_date_entry: Entry,
 }
 
 impl Context {
@@ -70,7 +70,6 @@ impl Context {
             search_entry: builder.get_object("search_entry").unwrap(),
             add_button: builder.get_object("add_button").unwrap(),
             edit_button: builder.get_object("edit_button").unwrap(),
-            delete_button: builder.get_object("delete_button").unwrap(),
             clear_button: builder.get_object("clear_button").unwrap(),
             status_label: builder.get_object("status_label").unwrap(),
             tape_treeview: builder.get_object("tape_treeview").unwrap(),
@@ -83,12 +82,13 @@ impl Context {
             add_title_entry: builder.get_object("add_title_entry").unwrap(),
             add_tape_entry: builder.get_object("add_tape_entry").unwrap(),
 
-            delete_dialog: builder.get_object("delete_dialog").unwrap(),
-            delete_delete_button: builder.get_object("delete_delete_button").unwrap(),
-            delete_cancel_button: builder.get_object("delete_cancel_button").unwrap(),
-            delete_title_entry: builder.get_object("delete_title_entry").unwrap(),
-            delete_tape_entry: builder.get_object("delete_tape_entry").unwrap(),
-            delete_date_entry: builder.get_object("delete_date_entry").unwrap(),
+            edit_dialog: builder.get_object("edit_dialog").unwrap(),
+            edit_delete_button: builder.get_object("edit_delete_button").unwrap(),
+            edit_cancel_button: builder.get_object("edit_cancel_button").unwrap(),
+            edit_save_button: builder.get_object("edit_save_button").unwrap(),
+            edit_title_entry: builder.get_object("edit_title_entry").unwrap(),
+            edit_tape_entry: builder.get_object("edit_tape_entry").unwrap(),
+            edit_date_entry: builder.get_object("edit_date_entry").unwrap(),
         };
 
         context.tape_treeview.set_model(Some(&context.tape_model_filter));
@@ -169,7 +169,6 @@ impl Context {
             return;
         }
 
-
         self.db.execute("INSERT INTO tapes (title, tape) \
                          VALUES (?1, ?2)",
                         &[&title, &tape]).unwrap();
@@ -183,6 +182,23 @@ impl Context {
 
         self.load_tapes();
     }
+
+    fn do_save_tape(&self, id: u32) {
+        let title = self.edit_title_entry.get_text().unwrap_or(String::new());
+        let tape = self.edit_tape_entry.get_text().unwrap_or(String::new());
+
+        if title.is_empty() || tape.is_empty() {
+            // Shouldn't happen
+            return;
+        }
+
+        self.db.execute("UPDATE tapes set title = ?1, tape = ?2 \
+                         WHERE id = ?3",
+                        &[&title, &tape, &id]).unwrap();
+
+        self.load_tapes();
+    }
+
 
     fn get_selection(&self) -> Option<Tape> {
         let selection = self.tape_treeview.get_selection();
@@ -228,7 +244,6 @@ fn ui_init(context: &Rc<RefCell<Context>>) {
     });
 
     ctx.edit_button.set_sensitive(false);
-    ctx.delete_button.set_sensitive(false);
     ctx.clear_button.set_sensitive(false);
 
     ctx.treeview_add_column(0, "ID", false);
@@ -273,7 +288,6 @@ fn ui_init(context: &Rc<RefCell<Context>>) {
         let ctx = ctx_clone.borrow();
 
         ctx.edit_button.set_sensitive(entry_selected);
-        ctx.delete_button.set_sensitive(entry_selected);
     });
 
     let ctx_clone = context.clone();
@@ -349,61 +363,58 @@ fn ui_init(context: &Rc<RefCell<Context>>) {
 
     let ctx_clone = context.clone();
 
-    ctx.delete_button.connect_clicked(move |_| {
+    ctx.edit_button.connect_clicked(move |_| {
         let context = &ctx_clone;
         let ctx = context.borrow();
 
-        ctx.delete_dialog.set_transient_for(&ctx.main_window);
-        ctx.delete_dialog.set_modal(true);
+        ctx.edit_dialog.set_transient_for(&ctx.main_window);
+        ctx.edit_dialog.set_modal(true);
 
-        ctx.delete_title_entry.set_sensitive(false);
-        ctx.delete_tape_entry.set_sensitive(false);
-        ctx.delete_date_entry.set_sensitive(false);
+        ctx.edit_date_entry.set_sensitive(false);
 
         let selected = match ctx.get_selection() {
             Some(t) => t,
             None => return,
         };
 
-        ctx.delete_title_entry.set_text(&selected.title);
-        ctx.delete_tape_entry.set_text(&selected.tape);
-        ctx.delete_date_entry.set_text(&selected.date);
+        ctx.edit_title_entry.set_text(&selected.title);
+        ctx.edit_tape_entry.set_text(&selected.tape);
+        ctx.edit_date_entry.set_text(&selected.date);
 
         let ctx_clone = context.clone();
 
-        ctx.delete_cancel_button.connect_clicked(move |_| {
+        ctx.edit_cancel_button.connect_clicked(move |_| {
             let ctx = ctx_clone.borrow();
 
-            ctx.delete_dialog.response(ResponseType::Cancel.into());
+            ctx.edit_dialog.response(ResponseType::Cancel.into());
         });
-
-
-        // let ctx_clone = context.clone();
-        // ctx.add_title_entry.connect_changed(move |_| {
-        //     ctx_clone.borrow().check_add_filled();
-        // });
-
-        // let ctx_clone = context.clone();
-        // ctx.add_tape_entry.connect_changed(move |_| {
-        //     ctx_clone.borrow().check_add_filled();
-        // });
 
         let ctx_clone = context.clone();
 
-        ctx.delete_delete_button.connect_clicked(move |_| {
+        ctx.edit_delete_button.connect_clicked(move |_| {
             let ctx = ctx_clone.borrow();
 
-            ctx.delete_dialog.response(ResponseType::Ok.into());
+            ctx.edit_dialog.response(ResponseType::No.into());
         });
 
-        ctx.delete_dialog.show_all();
+        let ctx_clone = context.clone();
 
-        let result = ctx.delete_dialog.run();
+        ctx.edit_save_button.connect_clicked(move |_| {
+             let ctx = ctx_clone.borrow();
 
-        ctx.delete_dialog.hide();
+             ctx.edit_dialog.response(ResponseType::Yes.into());
+        });
 
-        if result == ResponseType::Ok.into() {
+        ctx.edit_dialog.show_all();
+
+        let result = ctx.edit_dialog.run();
+
+        ctx.edit_dialog.hide();
+
+        if result == ResponseType::No.into() {
             ctx.do_delete_tape(selected.id);
+        } else if result == ResponseType::Yes.into() {
+            ctx.do_save_tape(selected.id);
         }
     });
 

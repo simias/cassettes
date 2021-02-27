@@ -1,21 +1,22 @@
+#[macro_use]
+extern crate anyhow;
 extern crate gtk;
+#[macro_use]
 extern crate rusqlite;
-extern crate time;
 
+use anyhow::Result;
 use std::cell::RefCell;
-use std::rc::Rc;
 use std::path::Path;
-
-use time::strftime;
+use std::rc::Rc;
 
 use rusqlite::Connection;
 
 use gtk::prelude::*;
-use gtk::{Builder, Window, Label, ListStore, TreeView};
-use gtk::{TreeViewColumn, CellRendererText, TreeModelFilter};
-use gtk::{Button, Entry, Dialog, ResponseType};
+use gtk::{Builder, Label, ListStore, TreeView, Window};
+use gtk::{Button, Dialog, Entry, ResponseType};
+use gtk::{CellRendererText, TreeModelFilter, TreeViewColumn};
 
-const UI_GLADE: &'static str = include_str!("ui.glade");
+const UI_GLADE: &str = include_str!("ui.glade");
 
 struct Tape {
     id: u32,
@@ -52,20 +53,22 @@ struct Context {
 }
 
 impl Context {
-    fn new(db_path: &Path) -> Context {
+    fn new(db_path: &Path) -> Result<Context> {
         let db = Connection::open(db_path).unwrap();
 
-        let builder = Builder::new_from_string(UI_GLADE);
+        let builder = Builder::from_string(UI_GLADE);
 
-        let tape_model = ListStore::new(&[u32::static_type(),
-                                          String::static_type(),
-                                          String::static_type(),
-                                          String::static_type()]);
+        let tape_model = ListStore::new(&[
+            u32::static_type(),
+            String::static_type(),
+            String::static_type(),
+            String::static_type(),
+        ]);
 
         let tape_model_filter = TreeModelFilter::new(&tape_model, None);
 
         let context = Context {
-            db: db,
+            db,
             main_window: builder.get_object("main_window").unwrap(),
             search_entry: builder.get_object("search_entry").unwrap(),
             add_button: builder.get_object("add_button").unwrap(),
@@ -73,8 +76,8 @@ impl Context {
             clear_button: builder.get_object("clear_button").unwrap(),
             status_label: builder.get_object("status_label").unwrap(),
             tape_treeview: builder.get_object("tape_treeview").unwrap(),
-            tape_model: tape_model,
-            tape_model_filter: tape_model_filter,
+            tape_model,
+            tape_model_filter,
 
             add_dialog: builder.get_object("add_dialog").unwrap(),
             add_add_button: builder.get_object("add_add_button").unwrap(),
@@ -91,50 +94,52 @@ impl Context {
             edit_date_entry: builder.get_object("edit_date_entry").unwrap(),
         };
 
-        context.tape_treeview.set_model(Some(&context.tape_model_filter));
-
-        context.load_tapes();
-
         context
+            .tape_treeview
+            .set_model(Some(&context.tape_model_filter));
+
+        context.load_tapes()?;
+
+        Ok(context)
     }
 
-    fn load_tapes(&self) {
+    fn load_tapes(&self) -> Result<()> {
         self.tape_model.clear();
 
-        let mut stmt =
-            self.db.prepare("SELECT id, title, tape, timestamp \
-                             FROM tapes ORDER BY id DESC").unwrap();
+        let mut stmt = self.db.prepare(
+            "SELECT id, title, tape, timestamp \
+                             FROM tapes ORDER BY id DESC",
+        )?;
 
-        let tapes: Vec<_> = stmt.query_map(&[], |row| {
-            let ts = row.get(3);
+        let tapes = stmt.query_map(params![], |row| {
+            Ok(Tape {
+                id: row.get(0)?,
+                title: row.get(1)?,
+                tape: row.get(2)?,
+                date: row.get(3)?,
+            })
+        })?;
 
-            let tm = time::at(ts);
-            let date = strftime("%Y-%m-%d %H:%M:%S", &tm).unwrap();
+        let mut tape_count = 0u32;
 
-            Tape {
-                id: row.get(0),
-                title: row.get(1),
-                tape: row.get(2),
-                date: date,
-            }
-        }).unwrap()
-            .map(|t| t.unwrap())
-            .collect();
-
-        for tape in &tapes {
-
-            self.tape_model.insert_with_values(None, &[0, 1, 2, 3],
-                                               &[&tape.id,
-                                                 &tape.title,
-                                                 &tape.tape,
-                                                 &tape.date]);
+        for tape in tapes {
+            let tape = tape?;
+            self.tape_model.insert_with_values(
+                None,
+                &[0, 1, 2, 3],
+                &[&tape.id, &tape.title, &tape.tape, &tape.date],
+            );
+            tape_count += 1;
         }
 
-        let status_text =
-            format!("<span foreground=\"green\">{}</span> films référencés",
-                    tapes.len());
+        let status_text = format!(
+            "<span foreground=\"green\">{}</span> films référencés",
+            tape_count
+        );
 
         self.status_label.set_markup(&status_text);
+
+        Ok(())
     }
 
     fn treeview_add_column(&self, id: i32, title: &str, visible: bool) {
@@ -152,8 +157,8 @@ impl Context {
     }
 
     fn check_add_filled(&self) {
-        let title = self.add_title_entry.get_text().unwrap_or(String::new());
-        let tape = self.add_tape_entry.get_text().unwrap_or(String::new());
+        let title = self.add_title_entry.get_text();
+        let tape = self.add_tape_entry.get_text();
 
         let filled = !title.is_empty() && !tape.is_empty();
 
@@ -161,69 +166,68 @@ impl Context {
     }
 
     fn check_edit_filled(&self) {
-        let title = self.edit_title_entry.get_text().unwrap_or(String::new());
-        let tape = self.edit_tape_entry.get_text().unwrap_or(String::new());
+        let title = self.edit_title_entry.get_text();
+        let tape = self.edit_tape_entry.get_text();
 
         let filled = !title.is_empty() && !tape.is_empty();
 
         self.edit_save_button.set_sensitive(filled);
     }
 
-    fn do_add_tape(&self) {
-        let title = self.add_title_entry.get_text().unwrap_or(String::new());
-        let tape = self.add_tape_entry.get_text().unwrap_or(String::new());
+    fn do_add_tape(&self) -> Result<()> {
+        let title = self.add_title_entry.get_text();
+        let tape = self.add_tape_entry.get_text();
 
         if title.is_empty() || tape.is_empty() {
-            // Shouldn't happen
-            return;
+            bail!("Attempted to add tape without title or reference");
         }
 
-        self.db.execute("INSERT INTO tapes (title, tape) \
+        self.db.execute(
+            "INSERT INTO tapes (title, tape) \
                          VALUES (?1, ?2)",
-                        &[&title, &tape]).unwrap();
+            params![title.as_str(), tape.as_str()],
+        )?;
 
-        self.load_tapes();
+        self.load_tapes()
     }
 
-    fn do_delete_tape(&self, id: u32) {
-        self.db.execute("DELETE FROM tapes WHERE id = ?1",
-                        &[&id]).unwrap();
+    fn do_delete_tape(&self, id: u32) -> Result<()> {
+        self.db
+            .execute("DELETE FROM tapes WHERE id = ?1", params![id])?;
 
-        self.load_tapes();
+        self.load_tapes()
     }
 
-    fn do_save_tape(&self, id: u32) {
-        let title = self.edit_title_entry.get_text().unwrap_or(String::new());
-        let tape = self.edit_tape_entry.get_text().unwrap_or(String::new());
+    fn do_save_tape(&self, id: u32) -> Result<()> {
+        let title = self.edit_title_entry.get_text();
+        let tape = self.edit_tape_entry.get_text();
 
         if title.is_empty() || tape.is_empty() {
-            // Shouldn't happen
-            return;
+            bail!("Attempted to add tape without title or reference");
         }
 
-        self.db.execute("UPDATE tapes set title = ?1, tape = ?2 \
+        self.db.execute(
+            "UPDATE tapes set title = ?1, tape = ?2 \
                          WHERE id = ?3",
-                        &[&title, &tape, &id]).unwrap();
+            params![title.as_str(), tape.as_str(), id],
+        )?;
 
-        self.load_tapes();
+        self.load_tapes()
     }
-
 
     fn get_selection(&self) -> Option<Tape> {
         let selection = self.tape_treeview.get_selection();
 
-        selection.get_selected().map(|(model, iter)| {
-            Tape {
-                id: model.get_value(&iter, 0).get().unwrap(),
-                title: model.get_value(&iter, 1).get().unwrap(),
-                tape: model.get_value(&iter, 2).get().unwrap(),
-                date: model.get_value(&iter, 3).get().unwrap(),
-            }
+        selection.get_selected().map(|(model, iter)| Tape {
+            id: model.get_value(&iter, 0).get().unwrap().unwrap(),
+            title: model.get_value(&iter, 1).get().unwrap().unwrap(),
+            tape: model.get_value(&iter, 2).get().unwrap().unwrap(),
+            date: model.get_value(&iter, 3).get().unwrap().unwrap(),
         })
     }
 }
 
-fn main() {
+fn main() -> Result<()> {
     let args: Vec<_> = ::std::env::args().collect();
 
     if args.len() < 2 {
@@ -232,16 +236,15 @@ fn main() {
 
     let db_path = Path::new(&args[1]);
 
-    if gtk::init().is_err() {
-        println!("Failed to initialize GTK.");
-        return;
-    }
+    gtk::init()?;
 
-    let context = Rc::new(RefCell::new(Context::new(db_path)));
+    let context = Rc::new(RefCell::new(Context::new(db_path)?));
 
     ui_init(&context);
 
     gtk::main();
+
+    Ok(())
 }
 
 fn ui_init(context: &Rc<RefCell<Context>>) {
@@ -265,7 +268,7 @@ fn ui_init(context: &Rc<RefCell<Context>>) {
     ctx.tape_model_filter.set_visible_func(move |model, iter| {
         let search_entry = &ctx_clone.borrow().search_entry;
 
-        let search = search_entry.get_text().unwrap_or(String::new());
+        let search = search_entry.get_text().as_str().to_string();
 
         // Make the search case-insensitive
         let search = search.to_uppercase();
@@ -274,11 +277,10 @@ fn ui_init(context: &Rc<RefCell<Context>>) {
             // No filter
             true
         } else {
-            let title: String = model.get_value(iter, 1).get().unwrap();
-            let tape: String =  model.get_value(iter, 2).get().unwrap();
+            let title: String = model.get_value(iter, 1).get().unwrap().unwrap();
+            let tape: String = model.get_value(iter, 2).get().unwrap().unwrap();
 
-            title.to_uppercase().contains(&search) ||
-                tape.to_uppercase().contains(&search)
+            title.to_uppercase().contains(&search) || tape.to_uppercase().contains(&search)
         }
     });
 
@@ -287,12 +289,7 @@ fn ui_init(context: &Rc<RefCell<Context>>) {
     ctx.tape_treeview.connect_cursor_changed(move |tree_view| {
         let selection = tree_view.get_selection();
 
-        let entry_selected =
-            if let Some(_) = selection.get_selected() {
-                true
-            } else {
-                false
-            };
+        let entry_selected = selection.get_selected().is_some();
 
         let ctx = ctx_clone.borrow();
 
@@ -310,7 +307,7 @@ fn ui_init(context: &Rc<RefCell<Context>>) {
     ctx.search_entry.connect_changed(move |entry| {
         let ctx = ctx_clone.borrow();
 
-        let search = entry.get_text().unwrap_or(String::new());
+        let search = entry.get_text();
 
         if search.is_empty() {
             ctx.clear_button.set_sensitive(false);
@@ -336,7 +333,7 @@ fn ui_init(context: &Rc<RefCell<Context>>) {
         ctx.add_cancel_button.connect_clicked(move |_| {
             let ctx = ctx_clone.borrow();
 
-            ctx.add_dialog.response(ResponseType::Cancel.into());
+            ctx.add_dialog.response(ResponseType::Cancel);
         });
 
         let ctx_clone = context.clone();
@@ -354,7 +351,7 @@ fn ui_init(context: &Rc<RefCell<Context>>) {
         ctx.add_add_button.connect_clicked(move |_| {
             let ctx = ctx_clone.borrow();
 
-            ctx.add_dialog.response(ResponseType::Ok.into());
+            ctx.add_dialog.response(ResponseType::Ok);
         });
 
         ctx.add_dialog.show_all();
@@ -363,8 +360,8 @@ fn ui_init(context: &Rc<RefCell<Context>>) {
 
         ctx.add_dialog.hide();
 
-        if result == ResponseType::Ok.into() {
-            ctx.do_add_tape();
+        if result == ResponseType::Ok {
+            ctx.do_add_tape().unwrap();
         }
     });
 
@@ -403,7 +400,7 @@ fn ui_init(context: &Rc<RefCell<Context>>) {
         ctx.edit_cancel_button.connect_clicked(move |_| {
             let ctx = ctx_clone.borrow();
 
-            ctx.edit_dialog.response(ResponseType::Cancel.into());
+            ctx.edit_dialog.response(ResponseType::Cancel);
         });
 
         let ctx_clone = context.clone();
@@ -411,15 +408,15 @@ fn ui_init(context: &Rc<RefCell<Context>>) {
         ctx.edit_delete_button.connect_clicked(move |_| {
             let ctx = ctx_clone.borrow();
 
-            ctx.edit_dialog.response(ResponseType::No.into());
+            ctx.edit_dialog.response(ResponseType::No);
         });
 
         let ctx_clone = context.clone();
 
         ctx.edit_save_button.connect_clicked(move |_| {
-             let ctx = ctx_clone.borrow();
+            let ctx = ctx_clone.borrow();
 
-             ctx.edit_dialog.response(ResponseType::Yes.into());
+            ctx.edit_dialog.response(ResponseType::Yes);
         });
 
         ctx.edit_dialog.show_all();
@@ -428,10 +425,10 @@ fn ui_init(context: &Rc<RefCell<Context>>) {
 
         ctx.edit_dialog.hide();
 
-        if result == ResponseType::No.into() {
-            ctx.do_delete_tape(selected.id);
-        } else if result == ResponseType::Yes.into() {
-            ctx.do_save_tape(selected.id);
+        if result == ResponseType::No {
+            ctx.do_delete_tape(selected.id).unwrap();
+        } else if result == ResponseType::Yes {
+            ctx.do_save_tape(selected.id).unwrap();
         }
     });
 
